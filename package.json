@@ -1,0 +1,35 @@
+{
+  "name": "sigmarsweb",
+  "version": "1.0.0",
+  "description": "A pale imitation of Sigmar's Garden from Zachtronic's awesome Opus Magnum game",
+  "private": "true",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "webpack --mode=development --watch --devtool=eval-source-map",
+    "dist": "webpack --mode=production",
+    "serve": "http-server -c-1 dist"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "webpack": "^5.68.0",
+    "webpack-cli": "^4.9.2"
+  },
+  "dependencies": {
+    "@pixi/app": "^6.2.2",
+    "@pixi/constants": "^6.2.2",
+    "@pixi/core": "^6.2.2",
+    "@pixi/display": "^6.2.2",
+    "@pixi/events": "^6.2.2",
+    "@pixi/interaction": "^6.2.2",
+    "@pixi/loaders": "^6.2.2",
+    "@pixi/math": "^6.2.2",
+    "@pixi/runner": "^6.2.2",
+    "@pixi/settings": "^6.2.2",
+    "@pixi/sprite": "^6.2.2",
+    "@pixi/spritesheet": "^6.2.2",
+    "@pixi/text": "^6.2.2",
+    "@pixi/ticker": "^6.2.2",
+    "@pixi/utils": "^6.2.2"
+  }
+}
