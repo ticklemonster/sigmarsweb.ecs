@@ -48,7 +48,8 @@ function RenderSystem(renderer) {
     return this;
 }
 
-RenderSystem.prototype = EventEmitter.prototype;
+RenderSystem.prototype = Object.create(EventEmitter.prototype);
+// RenderSystem.prototype.constructor = RenderSystem;
 
 RenderSystem.prototype.setTextures = function(textures) {
     this._textures = textures;

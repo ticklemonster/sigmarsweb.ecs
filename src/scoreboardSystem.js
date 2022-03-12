@@ -4,18 +4,12 @@ function ScoreboardSystem() {
     return this;
 }
 
-ScoreboardSystem.prototype.createEntities = function(entities) {
-    if (!entities) return;
-
-    // remove all existing "score" items
-    let i = -1;
-    while ((i = entities.indexOf(e => e.components.has('score'))) > -1) {
-        entities.splice(i, 1);
-    }
+ScoreboardSystem.prototype.createEntities = function() {
+    const scoreEntities = [];
 
     // add new "score" items
     for (let pt of PIECE_TYPES.keys()) { 
-        entities.push({
+        scoreEntities.push({
             name: `score for ${pt}`,
             components: new Map([
                 ['score', { 
@@ -26,6 +20,7 @@ ScoreboardSystem.prototype.createEntities = function(entities) {
         })
     }
 
+    return scoreEntities;
 }
 
 ScoreboardSystem.prototype.update = function(t, entities) {
