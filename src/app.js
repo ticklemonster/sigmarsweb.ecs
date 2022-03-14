@@ -2,7 +2,7 @@
 import { Renderer, BatchRenderer } from '@pixi/core';
 Renderer.registerPlugin('batch', BatchRenderer);
 import { InteractionManager } from '@pixi/interaction';
-
+Renderer.registerPlugin('interaction', InteractionManager);
 import { Ticker } from '@pixi/ticker';
 import { Loader } from "@pixi/loaders";
 import { Spritesheet } from "@pixi/spritesheet";
@@ -18,6 +18,8 @@ import RenderSystem from './renderSystem';
 import GameSystem from './gameSystem';
 import ScoreboardSystem from './scoreboardSystem';
 import UISystem from './uiSystem';
+import EntityManager from './entityManager';
+import CommandManager from './commandManager';
 
 // State information
 const LOCALSTORAGE_WIN_KEY = 'sigmarsweb.wins';
@@ -38,16 +40,18 @@ document.body.appendChild(renderer.view);
 const loader = new Loader();
 
 // Initialize the Systems
+const entityManager = new EntityManager();
+const commandManager = new CommandManager();
 const layoutGenerator = new LayoutGenerator();
 const gameSystem = new GameSystem();
 const renderSystem = new RenderSystem(renderer);
 const scoreboardSystem = new ScoreboardSystem();
 const uiSystem = new UISystem();
-const interactionManager = new InteractionManager(renderer, {useSystemTicker: false})
 
 // Add the systems (to a PIXI.Ticker)
 let timeCounter = 30;
 const ticker = new Ticker();
+ticker.stop();
 ticker.add((t) => {
     switch (gameState) {
         case GAMESTATE_INIT:
@@ -63,19 +67,19 @@ ticker.add((t) => {
             console.debug('Start a NEW GAME');
 
             // clear the entity system and start again...
-            clearEntities();
-            clearUndo();
+            entityManager.clear();
+            commandManager.clear();
             uiSystem.enableUndoButton(false);
 
             // add the scoreboard entities then start the layout (no undo)
-            addEntities(
+            entityManager.addEntities(
                 scoreboardSystem.createEntities(), false
             );
             layoutGenerator.startLayout();
             uiSystem.enableNewGameButton(false);
             gameState = GAMESTATE_LAYOUT;
 
-            renderSystem.update(t, entities);
+            renderSystem.update(t, entityManager.entities);
             break;
 
         case GAMESTATE_LAYOUT:
@@ -88,22 +92,22 @@ ticker.add((t) => {
                 gameState = GAMESTATE_RUNNING;
             }
             else if (nextEntity !== undefined) {
-                addEntities([nextEntity], false);
+                entityManager.addEntities([nextEntity], false);
             }
 
-            gameSystem.update(t, entities);
-            scoreboardSystem.update(t, entities);
-            renderSystem.update(t, entities);
+            gameSystem.update(t, entityManager.entities);
+            scoreboardSystem.update(t, entityManager.entities);
+            renderSystem.update(t, entityManager.entities);
 
             break;
 
         case GAMESTATE_RUNNING:
-            gameSystem.update(t, entities);
-            scoreboardSystem.update(t, entities);
-            renderSystem.update(t, entities);
+            gameSystem.update(t, entityManager.entities);
+            scoreboardSystem.update(t, entityManager.entities);
+            renderSystem.update(t, entityManager.entities);
 
             // if all the pieces are gone - then the player wins!
-            if (entities.filter(e => e.components.has('piece')).length == 0) {
+            if (entityManager.getEntitiesWithComponent('piece').length == 0) {
                 console.log('WIN!');
                 gameState = GAMESTATE_WIN;
             }
@@ -116,14 +120,18 @@ ticker.add((t) => {
             uiSystem.setWins(wins);
             gameState = GAMESTATE_OVER;
 
+            uiSystem.enableNewGameButton(true);
+            uiSystem.enableUndoButton(false);
+            uiSystem.enableRedoButton(false);
+
         case GAMESTATE_OVER:
-            renderSystem.update(t, entities);
+            renderSystem.update(t, entityManager.entities);
             break;
     }
 });
 
-// initGame - in a closure, just for laughs
-(function() {
+// initialize the Game
+{
     console.debug('+ GAMESTATE_INIT');
 
     // Run the async loaders
@@ -158,138 +166,74 @@ ticker.add((t) => {
 
     // subscribe to game level events
     uiSystem.on('NEW GAME', () => {
-        console.debug('NEW GAME event received');
+        console.debug('NEW GAME event received from UISystem');
         gameState = GAMESTATE_NEW;
     });
     uiSystem.on('UNDO', () => {
-        console.log('UNDO event from UI');
+        console.debug('UNDO EVENT received from UISystem');
         clearSelections();
-        undoAction();
-        if (undoList.length == 0) uiSystem.enableUndoButton(false);
+        commandManager.undoAction();
+        uiSystem.enableUndoButton(commandManager.canUndo());
+        uiSystem.enableRedoButton(commandManager.canRedo());
     });
     uiSystem.on('REDO', () => {
-        console.log('REDO event from UI');
+        console.debug('REDO EVENT received from UISystem');
         clearSelections();
-        redoAction();
-        // if (redoList.length == 0) uiSystem.enableRedoButton(false);
+        commandManager.redoAction();
+        uiSystem.enableUndoButton(commandManager.canUndo());
+        uiSystem.enableRedoButton(commandManager.canRedo());
     });
 
     renderSystem.on('SELECT', (entity) => {
-        // console.debug('SELECT EVENT for ', entity);
+        console.debug(`SELECT EVENT for ${entity.name} received from RenderSystem`);
         selectEntities([entity]);
     });
     
     gameSystem.on('UNSELECT', (entities) => {
-        // console.debug(`UNSELECT EVENT for `, entities);
+        console.debug(`UNSELECT EVENT for ${entities.map(e => e.name)} received from GameSystem`);
         selectEntities(entities, false);
     });
 
     gameSystem.on('REMOVE', (entities) => {
-        // console.debug('REMOVE EVENT for ', entities);
+        console.debug(`REMOVE EVENT for ${entities.map(e => e.name)} received from GameSystem`);
         // use the COMMAND to make this undoable
         selectEntities(entities, false);
-        doAction( () => removeEntities(entities), () => addEntities(entities) );
+        commandManager.doAction( () => entityManager.removeEntities(entities), () => entityManager.addEntities(entities) );
+        uiSystem.enableUndoButton(commandManager.canUndo());
+        uiSystem.enableRedoButton(commandManager.canRedo());
     });
         
-
     // set up the win tracker
     wins = parseInt(window.localStorage.getItem(LOCALSTORAGE_WIN_KEY), 10) || 0;
     uiSystem.setWins( wins );
-
-})();
-
-
-//
-// Command-pattern for user actions to enable undo/redo
-//
-let undoList = [];
-let redoList = [];
-
-function clearUndo() {
-    undoList = [];
-    redoList = [];
 }
 
-function doAction(action, undoaction) {
-    action();
-    undoList.push({ 'action': action, 'undoaction': undoaction });
-    redoList = [];
-    
-    uiSystem.enableUndoButton(true);
-}
-
-function undoAction() {
-    const command = undoList.pop();
-    if (command) {
-        command.undoaction();
-        redoList.push(command);
-    }
-
-    uiSystem.enableUndoButton(undoList.length > 0);
-    // uiSystem.enableRedoButton(redoList.length > 0);
-}
-
-function redoAction() {
-    const command = redoList.pop();
-    if (command) {
-        command.action();
-        undoList.push(command)
-    }
-}
-
-//
-// Entity Management
-//
-let entities = [];
-
-function clearEntities() {
-    entities = [];
-}
-
-function addEntities(es) {
-    es.forEach(e => console.debug(`[ add entity ${e.name}]`));
-    entities = [ ...entities, ...es ];
-}
-
-function removeEntities(es) {
-    // "destroy" each component
-    for (let e of es) {
-        console.debug(`[ remove entity ${e.name}]`);
-        for (let c of e.components) {
-            if (c.destroy && typeof c.destroy == 'function') c.destroy();
-        }
-    }
-
-    // remove the entities
-    entities = entities.filter(e => !es.includes(e));
-}
 
 
 //
 // select or unselect an entity
-// if not defined, then toggle the current state
+// if "shouldSelect" is undefined, then toggle the current state
 //
-function selectEntities(ens, shouldSelect = undefined) {
-    for (let entity of ens) {
-        if (entity && entity.components.has('piece')) {
-            const p = entity.components.get('piece');
-            p.selected = (shouldSelect === undefined) ? !p.selected : shouldSelect;
+function selectEntities(entities, shouldSelect = undefined) {
+    entities.forEach(entity => {
+        const piece = entityManager.getComponent(entity, 'piece');
+        if (entity && piece) {
+            piece.selected = (shouldSelect === undefined) ? !piece.selected : shouldSelect;
 
-            if (p.selected) {
-                console.debug(`[ select piece ${entity.name}]`);
-                addEntities([newSelectorEntityFor(entity)]);
+            if (piece.selected) {
+                console.debug(`[ select piece ${entity.name} ]`);
+                entityManager.addEntities([newSelectorEntityFor(entity)]);
             } else {
-                console.debug(`[ unselect piece ${entity.name}]`);
-                const selectors = entities.filter(e => e.components.has('selector') && e.components.get('selector').entity == entity);
-                removeEntities(selectors);
+                console.debug(`[ unselect piece ${entity.name} ]`);
+                const selectors = entityManager.getEntitiesWithComponentValue('selector', 'entity', entity);
+                entityManager.removeEntities(selectors);
             }
         }
-    }
-
+    });
 }
 
 function clearSelections() {
-    const selected = entities.filter(e => e.components.has('piece') && e.components.get('piece').selected);
+    const selected = entityManager.getEntitiesWithComponentValue('piece', 'selected', true);
     selectEntities(selected, false);
 }
 
@@ -305,27 +249,3 @@ function newSelectorEntityFor(other) {
 
     return entity;
 }
-
-// function destroyEntityComponents(entity) {
-//     entity.components.forEach(c => {
-//         if (c.destroy && typeof(c.destroy) === 'function') {
-//             c.destroy();
-//         }
-//     })
-// }
-// 
-// function removeSelectorFrom(entity, entities) {
-//     let i = -1;
-//     while ((i = entities.findIndex(e => e.components.has('selector') && e.components.get('selector').entity == entity)) > -1) {
-//         destroyEntityComponents(entities[i]);
-//         entities.splice(i, 1);
-//     }
-// }
-
-// function removeEntityFrom(entity, entities) {
-//     const i = entities.findIndex(e => e == entity);
-//     if (i > -1) {
-//         destroyEntityComponents(entity);
-//         entities.splice(i, 1);
-//     }
-// }

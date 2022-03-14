@@ -35,6 +35,11 @@ UISystem.prototype.enableUndoButton = function(shouldEnable) {
     this._undoButton.tint = shouldEnable ? 0xffffff : 0x888888
 }
 
+UISystem.prototype.enableRedoButton = function(shouldEnable) {
+    // this._redoButton.interactive = shouldEnable;
+    // this._redoButton.tint = shouldEnable ? 0xffffff : 0x888888
+}
+
 UISystem.prototype.setWins = function(wins) {
     this._winCounter.text = `Wins\n${wins}`;
 }
