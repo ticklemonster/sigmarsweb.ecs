@@ -76,14 +76,15 @@ RenderSystem.prototype.setHighlightType = function(typename, status) {
     this._highlightType = (status) ? typename : undefined;
 }
 
-RenderSystem.prototype.update = function(t, entities) {
+RenderSystem.prototype.update = function(t, entityManager) {
     if (!this._renderer) return;
 
     // add sprites to pieces that don't have one
-    entities
-        .filter(e => e.components.has('piece') && !e.components.has('sprite'))
+    entityManager.getEntitiesWithComponent('piece')
+        .filter(entity => entityManager.getEntityComponent(entity, 'sprite') === undefined)
         .forEach(entity => {
-            const piece = entity.components.get('piece');
+            const piece = entityManager.getEntityComponent(entity, 'piece');
+            
             const sprite = new Sprite(this._textures[PIECE_TYPES.get(piece.type).sprite]);
             sprite.anchor = { x: 0.5, y: 0.5 };
             sprite.buttonMode = true;
@@ -92,28 +93,28 @@ RenderSystem.prototype.update = function(t, entities) {
 
             sprite.addListener('pointertap', () => { this.emit('SELECT', entity) });
 
-            entity.components.set('sprite', sprite);
+            entityManager.setEntityComponent(entity, 'sprite', sprite);
             // console.debug(`RenderSystem.update - new sprite for ${entity.name} => `, sprite);
         });
 
     // add sprites to selectors that don't have one
-    entities
-        .filter(e => e.components.has('selector') && !e.components.has('sprite'))
+    entityManager.getEntitiesWithComponent('selector')
+        .filter(entity => entityManager.getEntityComponent(entity, 'sprite') === undefined)
         .forEach(entity => {
-            const otherEntity = entity.components.get('selector');
-            const otherSprite = otherEntity.entity.components.get('piece');
+            const otherEntity = entityManager.getEntityComponent(entity, 'selector').for;
+            const otherSprite = entityManager.getEntityComponent(otherEntity, 'sprite');
             const sprite = new Sprite(this._textures['selector.png']);
             sprite.anchor = { x: 0.5, y: 0.5 };
             sprite.position.copyFrom(otherSprite.position);
-            entity.components.set('sprite', sprite);
-            // console.debug(`RenderSystem.update - new sprite for ${entity.name} => `, sprite);
+
+            entityManager.setEntityComponent(entity, 'sprite', sprite);
         });
 
     // add scoreboard display components...
-    entities
-        .filter(e => e.components.has('score') && !e.components.has('sprite'))
+    entityManager.getEntitiesWithComponent('score')
+        .filter(entity => entityManager.getEntityComponent(entity, 'sprite') === undefined)
         .forEach(entity => {
-            const scoreObj = entity.components.get('score');
+            const scoreObj = entityManager.getEntityComponent(entity, 'score');
             
             let p = new Sprite(this._textures[PIECE_TYPES.get(scoreObj.type).sprite]);
             p.anchor.set(0.5);
@@ -132,7 +133,7 @@ RenderSystem.prototype.update = function(t, entities) {
             p.addListener('pointerup', () => { this._highlightType = undefined });
             p.addListener('pointerout', () => { this._highlightType = undefined });
 
-            entity.components.set('sprite', p);
+            entityManager.setEntityComponent(entity, 'sprite', p);
         });
 
     // console.debug(`RenderSystem.update: ${entities.length} entities`);
@@ -147,11 +148,11 @@ RenderSystem.prototype.update = function(t, entities) {
     stage.addChild(this._static);
 
     // for every entity with a sprite...
-    for (let entity of entities.filter(e => e.components.has('sprite'))) {
-        const sprite = entity.components.get('sprite');
+    entityManager.getEntitiesWithComponent('sprite').forEach(entity => {
+        const sprite = entityManager.getEntityComponent(entity, 'sprite');
         
         // update the visual state if there is a piece to reflect
-        const piece = entity.components.get('piece');
+        const piece = entityManager.getEntityComponent(entity, 'piece');
         if (piece) {
             sprite.position = axialToScreen(piece.position.q, piece.position.r);
             
@@ -167,7 +168,7 @@ RenderSystem.prototype.update = function(t, entities) {
         }
 
         // update scoreboard components based on values...
-        const score = entity.components.get('score');
+        const score = entityManager.getEntityComponent(entity, 'score');
         if (score) {
             sprite.tint = (score.value == 0) ? TINT_HIDE : TINT_SHOW;
             sprite.interactive = (score.value > 0);
@@ -178,14 +179,15 @@ RenderSystem.prototype.update = function(t, entities) {
         }
 
         // make sure selectors stay with their pieces
-        if (entity.components.has('selector')) {
-            entity.components.get('sprite').position.copyFrom( entity.components.get('selector').entity.components.get('sprite').position);
+        const selector = entityManager.getEntityComponent(entity, 'selector');
+        if (selector) {
+            sprite.position.copyFrom(entityManager.getEntityComponent(selector.for, 'sprite').position);
         }
         
         // add them to the display container
         stage.addChild(sprite);
         sprite.updateTransform();
-    }
+    });
 
     // render all the components and finish the batch to flush
     this._renderer.render(stage);

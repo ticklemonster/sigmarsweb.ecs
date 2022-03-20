@@ -5,15 +5,15 @@
   "private": "true",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "webpack --mode=development --watch --devtool=eval-source-map",
-    "dist": "webpack --mode=production",
-    "serve": "http-server -c-1 dist"
+    "dev": "webpack serve --mode=development --devtool=eval-source-map",
+    "dist": "webpack --mode=production"
   },
   "author": "",
   "license": "ISC",
   "devDependencies": {
     "webpack": "^5.68.0",
-    "webpack-cli": "^4.9.2"
+    "webpack-cli": "^4.9.2",
+    "webpack-dev-server": "^4.7.4"
   },
   "dependencies": {
     "@pixi/app": "^6.2.2",
@@ -30,6 +30,7 @@
     "@pixi/spritesheet": "^6.2.2",
     "@pixi/text": "^6.2.2",
     "@pixi/ticker": "^6.2.2",
-    "@pixi/utils": "^6.2.2"
+    "@pixi/utils": "^6.2.2",
+    "gsap": "^3.9.1"
   }
 }

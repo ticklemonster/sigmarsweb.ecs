@@ -5,7 +5,15 @@ import { InteractionManager } from '@pixi/interaction';
 Renderer.registerPlugin('interaction', InteractionManager);
 import { Ticker } from '@pixi/ticker';
 import { Loader } from "@pixi/loaders";
-import { Spritesheet } from "@pixi/spritesheet";
+import { Spritesheet } from '@pixi/spritesheet';
+
+// Add GSAP for animations
+import { gsap } from 'gsap';
+import { PixiPlugin } from 'gsap/PixiPlugin.js';
+import { DisplayObject } from '@pixi/display';
+gsap.registerPlugin(PixiPlugin);
+PixiPlugin.registerPIXI({ 'DisplayObject': DisplayObject });
+
 
 // assets to be loaded
 import backgroundImage from './images/hexboard.png';
@@ -32,6 +40,10 @@ const GAMESTATE_OVER = 'GAME OVER';
 
 let gameState = GAMESTATE_INIT;
 let wins = 0;
+
+// Tracker for hints
+const HINT_TIMEOUT = 600;   // 600 frames @ 60fps = 10 sec
+let idleFrames = 0;
 
 // Initialize PIXI.js components
 const renderer = new Renderer({ width: 720, height: 720, backgroundColor: 0x00008b });
@@ -64,7 +76,7 @@ ticker.add((t) => {
             break; 
 
         case GAMESTATE_NEW:
-            console.debug('Start a NEW GAME');
+            console.info('Starting a NEW GAME of Sigmar\'s Garden (Web)');
 
             // clear the entity system and start again...
             entityManager.clear();
@@ -73,44 +85,64 @@ ticker.add((t) => {
 
             // add the scoreboard entities then start the layout (no undo)
             entityManager.addEntities(
-                scoreboardSystem.createEntities(), false
+                scoreboardSystem.createEntities()
             );
             layoutGenerator.startLayout();
             uiSystem.enableNewGameButton(false);
             gameState = GAMESTATE_LAYOUT;
 
-            renderSystem.update(t, entityManager.entities);
+            renderSystem.update(t, entityManager);
             break;
 
         case GAMESTATE_LAYOUT:
-            const nextEntity = layoutGenerator.nextEntity(t);
-            if (nextEntity === null) {
+            const nextPiece = layoutGenerator.nextPiece();
+            if (nextPiece === null) {
                 // layout is finished - get ready to start the game
-                console.debug('Layout COMPLETE');
-
                 uiSystem.enableNewGameButton(true);
                 gameState = GAMESTATE_RUNNING;
             }
-            else if (nextEntity !== undefined) {
-                entityManager.addEntities([nextEntity], false);
+            else if (nextPiece !== undefined) {
+                entityManager.addEntities([{ name: nextPiece.piece.name, ...nextPiece }], false);
             }
 
-            gameSystem.update(t, entityManager.entities);
-            scoreboardSystem.update(t, entityManager.entities);
-            renderSystem.update(t, entityManager.entities);
+            gameSystem.update(t, entityManager);
+            scoreboardSystem.update(t, entityManager);
+            renderSystem.update(t, entityManager);
 
             break;
 
         case GAMESTATE_RUNNING:
-            gameSystem.update(t, entityManager.entities);
-            scoreboardSystem.update(t, entityManager.entities);
-            renderSystem.update(t, entityManager.entities);
-
+            
+            gameSystem.update(t, entityManager);
+            scoreboardSystem.update(t, entityManager);
+            renderSystem.update(t, entityManager);
+            
             // if all the pieces are gone - then the player wins!
             if (entityManager.getEntitiesWithComponent('piece').length == 0) {
-                console.log('WIN!');
+                console.info('YOU WIN!');
                 gameState = GAMESTATE_WIN;
             }
+            
+            // if we've been idle for while, ask for a hint
+            idleFrames += t;
+            if (idleFrames > HINT_TIMEOUT) {
+                const hint = gameSystem.getHint(entityManager);
+                if (!hint || hint.length == 0) {
+                    console.info('GAME OVER - no more moves possible!');
+                }
+                else hint.forEach(entity => {
+                    const sprite0 = entityManager.getEntityComponent(entity, 'sprite');
+                    gsap.to(sprite0, {
+                        duration: 0.3, 
+                        yoyo: true, 
+                        repeat: 3, 
+                        pixi: { scale: 1.2 }
+                    });
+                });
+
+                idleFrames = 0;
+            }
+
             break;
 
         case GAMESTATE_WIN:
@@ -125,22 +157,18 @@ ticker.add((t) => {
             uiSystem.enableRedoButton(false);
 
         case GAMESTATE_OVER:
-            renderSystem.update(t, entityManager.entities);
+            renderSystem.update(t, entityManager);
             break;
     }
 });
 
 // initialize the Game
 {
-    console.debug('+ GAMESTATE_INIT');
-
     // Run the async loaders
     loader
         .add('background', backgroundImage)
         .add('sprites', spritesheetImage)
         .load((_loader, resources) => {
-            console.debug('loader finished')
-
             // parse the spritesheet after the image is loaded
             const spritesheet = new Spritesheet(
                 resources['sprites'].texture.baseTexture,
@@ -151,13 +179,12 @@ ticker.add((t) => {
                 resources['spritesheet'] = spritesheet;
                 
                 // give textures to the renderSystem...
-                console.debug('spritesheet ready');
                 renderSystem.setTextures({...spritesheet.textures, 'background': resources['background'].texture});
 
                 // add the background and static HUD objects
                 renderSystem.addStaticTexture(0, 0, 'background');
                 uiSystem.getDisplayObjects().forEach(o => renderSystem.addStaticDisplayObject(o));
-                renderSystem.update(0, []);
+                renderSystem.update(0, entityManager);
 
                 // kick off the Systems
                 ticker.start();
@@ -166,41 +193,51 @@ ticker.add((t) => {
 
     // subscribe to game level events
     uiSystem.on('NEW GAME', () => {
-        console.debug('NEW GAME event received from UISystem');
+        // console.debug('NEW GAME event received from UISystem');
         gameState = GAMESTATE_NEW;
     });
     uiSystem.on('UNDO', () => {
-        console.debug('UNDO EVENT received from UISystem');
+        // console.debug('UNDO EVENT received from UISystem');
         clearSelections();
         commandManager.undoAction();
         uiSystem.enableUndoButton(commandManager.canUndo());
         uiSystem.enableRedoButton(commandManager.canRedo());
+
+        idleFrames = 0;
     });
     uiSystem.on('REDO', () => {
-        console.debug('REDO EVENT received from UISystem');
+        // console.debug('REDO EVENT received from UISystem');
         clearSelections();
         commandManager.redoAction();
         uiSystem.enableUndoButton(commandManager.canUndo());
         uiSystem.enableRedoButton(commandManager.canRedo());
+
+        idleFrames = 0;
     });
 
     renderSystem.on('SELECT', (entity) => {
-        console.debug(`SELECT EVENT for ${entity.name} received from RenderSystem`);
+        // console.debug(`SELECT EVENT for ${entity.name} received from RenderSystem`);
         selectEntities([entity]);
+
+        idleFrames = 0;
     });
     
     gameSystem.on('UNSELECT', (entities) => {
-        console.debug(`UNSELECT EVENT for ${entities.map(e => e.name)} received from GameSystem`);
+        // console.debug(`UNSELECT EVENT for ${entities.map(e => e.name)} received from GameSystem`);
         selectEntities(entities, false);
+
+        idleFrames = 0;
     });
 
     gameSystem.on('REMOVE', (entities) => {
-        console.debug(`REMOVE EVENT for ${entities.map(e => e.name)} received from GameSystem`);
+        // console.debug(`REMOVE EVENT for ${entities.map(e => e.name)} received from GameSystem`);
         // use the COMMAND to make this undoable
         selectEntities(entities, false);
         commandManager.doAction( () => entityManager.removeEntities(entities), () => entityManager.addEntities(entities) );
         uiSystem.enableUndoButton(commandManager.canUndo());
         uiSystem.enableRedoButton(commandManager.canRedo());
+
+        idleFrames = 0;
     });
         
     // set up the win tracker
@@ -216,16 +253,16 @@ ticker.add((t) => {
 //
 function selectEntities(entities, shouldSelect = undefined) {
     entities.forEach(entity => {
-        const piece = entityManager.getComponent(entity, 'piece');
+        const piece = entityManager.getEntityComponent(entity, 'piece');
         if (entity && piece) {
             piece.selected = (shouldSelect === undefined) ? !piece.selected : shouldSelect;
 
             if (piece.selected) {
-                console.debug(`[ select piece ${entity.name} ]`);
+                // console.debug(`[ select piece ${entity.name} ]`);
                 entityManager.addEntities([newSelectorEntityFor(entity)]);
             } else {
-                console.debug(`[ unselect piece ${entity.name} ]`);
-                const selectors = entityManager.getEntitiesWithComponentValue('selector', 'entity', entity);
+                // console.debug(`[ unselect piece ${entity.name} ]`);
+                const selectors = entityManager.getEntitiesWithComponentValue('selector', 'for', entity);
                 entityManager.removeEntities(selectors);
             }
         }
@@ -240,11 +277,9 @@ function clearSelections() {
 function newSelectorEntityFor(other) {
     const entity = {
         name: 'selector for ' + other.name,
-        components: new Map([
-            ['selector', {
-                'entity': other,
-            }],
-        ])
+        selector: {
+            'for': other,
+        }
     }
 
     return entity;

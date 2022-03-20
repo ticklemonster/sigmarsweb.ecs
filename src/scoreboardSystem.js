@@ -11,28 +11,26 @@ ScoreboardSystem.prototype.createEntities = function() {
     for (let pt of PIECE_TYPES.keys()) { 
         scoreEntities.push({
             name: `score for ${pt}`,
-            components: new Map([
-                ['score', { 
-                    type: pt,
-                    value: 0,
-                }]
-            ])
+            score: { type: pt, value: 0 }
         })
     }
 
     return scoreEntities;
 }
 
-ScoreboardSystem.prototype.update = function(t, entities) {
-    const pieces = entities.filter(e => e.components.has('piece')).map(e => e.components.get('piece'));
-    const scores = entities.filter(e => e.components.has('score'));
+ScoreboardSystem.prototype.update = function(t, entityManager) {
+    const pieces = entityManager.getEntitiesWithComponent('piece')
+        .map(e => entityManager.getEntityComponent(e, 'piece'));
+    const scores = entityManager.getEntitiesWithComponent('score')
+        .map(e => entityManager.getEntityComponent(e, 'score'));
+
     for (let pieceType of PIECE_TYPES.keys()) {
         // update the score only if there is a matching entity
-        const scoreEntity = scores.find(e => e.components.get('score').type == pieceType);
-        if (scoreEntity) {
+        const scoreComp = scores.find(score => score.type == pieceType);
+        if (scoreComp) {
             // count the pieces...
             const pieceCount = pieces.filter(p => p.type == pieceType).length
-            scoreEntity.components.get('score').value = pieceCount;
+            scoreComp.value = pieceCount;
         }
     }
 

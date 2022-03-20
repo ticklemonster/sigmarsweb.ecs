@@ -7,6 +7,9 @@ This is an exercise for my own learning, but is relatively complete and function
 It was refactored in an attempt to take an _Entity-Component-System_ type approach, with PIXI.js as the renderer.
 
 ## Recent updates
+20 Mar 2022
+* Refactor to remove knowledge of Entity/Component storage from Systems (all Systems now use EntityManager)
+* Added a HINT feature
 12 Mar 2022
 * Added an UNDO capability (with redo in the code, but not the UI)
 
