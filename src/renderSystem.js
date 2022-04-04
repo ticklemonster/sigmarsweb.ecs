@@ -1,34 +1,30 @@
+// Import all the PIXI components explicity
 import { Container } from '@pixi/display';
 import { Sprite } from '@pixi/sprite';
-import { Text } from '@pixi/text';
 import { Circle } from '@pixi/math';
-import { PIECE_TYPES } from './constants';
 import { EventEmitter } from '@pixi/utils';
 
-// display style constants
-const ALPHA_SHOW = 1.0;
-const ALPHA_HIDE = 0.7;
-const TINT_HIDE = 0x888888;
-const TINT_SHOW = 0xffffff;
+// Add GSAP for animations
+import { gsap } from 'gsap';
+import { PixiPlugin } from 'gsap/PixiPlugin.js';
+import { DisplayObject } from '@pixi/display';
+gsap.registerPlugin(PixiPlugin);
+PixiPlugin.registerPIXI({ 'DisplayObject': DisplayObject });
+
+// ECS information
+import { defineQuery, enterQuery, exitQuery } from "bitecs";
+import { AxialPosition, Displayable, Piece, SPRITE_NAMES, DISPLAY_STATES, PIECE_STATES } from './components';
+const axialDisplayableQuery = defineQuery([ AxialPosition, Displayable ]);
+const pieceDisplayQuery = defineQuery([ Piece, Displayable ]);
+const displayableQuery = defineQuery([ Displayable ]);
+const enterDisplayable = enterQuery(displayableQuery);
+const exitDisplayable = exitQuery(displayableQuery);
+
+// Event Management
+const SELECT_EVENT = 'SELECT';
+
 
 // TODO: Parameterise all of the display stuff - no hardcoded sizes!
-
-const SCOREBOARD_POSITION = new Map([
-    ['salt',        { x:  65, y: 650 }],
-    ['fire',        { x: 120, y: 650 }],
-    ['water',       { x: 160, y: 650 }],
-    ['earth',       { x: 200, y: 650 }],
-    ['air',         { x: 240, y: 650 }],
-    ['mors',        { x: 300, y: 650 }],
-    ['vitae',       { x: 340, y: 650 }],
-    ['quicksilver', { x: 400, y: 650 }],
-    ['lead',        { x: 455, y: 650 }],
-    ['tin',         { x: 495, y: 650 }],
-    ['iron',        { x: 535, y: 650 }],
-    ['copper',      { x: 575, y: 650 }],
-    ['silver',      { x: 615, y: 650 }],
-    ['gold',        { x: 655, y: 650 }],
-]);
 
 function axialToScreen(q, r) {
     var x = 360 + 32 * (Math.sqrt(3) * q + Math.sqrt(3)/2 * r)
@@ -36,162 +32,170 @@ function axialToScreen(q, r) {
     return { x: x, y: y };
 }
 
+
 function RenderSystem(renderer) {
-    EventEmitter.apply(this);
+    EventEmitter.call(this);
 
     this._renderer = renderer;
-    this._textures = {};
-    this._static = new Container();
+    this._isReady = false;
+    this._spritesheet = undefined;
+    
     this._stage = new Container();
-    this._highlightType = undefined;
-
+    this._static = new Container();
+    this._stage.addChild(this._static);
+        
     return this;
 }
 
 RenderSystem.prototype = Object.create(EventEmitter.prototype);
-// RenderSystem.prototype.constructor = RenderSystem;
 
-RenderSystem.prototype.setTextures = function(textures) {
-    this._textures = textures;
-}
+RenderSystem.prototype.init = function(resources) {
+    // add the static background...
+    try {
+        const bgSprite = new Sprite(resources['background'].texture)
+        this._static.addChild(bgSprite);
+    } catch (e) {
+        console.error('No "background" texture found');
+    }
 
-RenderSystem.prototype.addStaticTexture = function(x, y, texture) {
-    const newSprite = new Sprite(this._textures[texture]);
-    newSprite.position.set(x, y);
-    // console.debug(`RenderSystem.addStatic(${x},${y},${texture}) => `, newSprite);
-    this._static.addChild(newSprite);
+    // save the spritesheet for later
+    this._spritesheet = resources['spritesheet'];
+
+    this._isReady = true;
+    console.debug('RenderSystem is ready!');
 }
 
 RenderSystem.prototype.addStaticDisplayObject = function(displayObject) {
     this._static.addChild(displayObject);
 }
 
-RenderSystem.prototype.clearStatic = function() {
-    for (let d = this._static.removeChildAt(0); d; d = this._static.removeChildAt(0)) {
-        d.destroy();
+RenderSystem.prototype.removeStaticDisplayObject = function(displayObject) {
+    this._static.removeChild(displayObject);
+}
+
+// RenderSystem.prototype.clearStatic = function() {
+//     for (let d = this._static.removeChildAt(0); d; d = this._static.removeChildAt(0)) {
+//         d.destroy();
+//     }
+// }
+
+RenderSystem.prototype.isReady = function() {
+    return this._isReady; 
+}
+
+RenderSystem.prototype.clear = function() {
+    this._stage.removeChildren();
+    this._stage.addChild(this._static);
+}
+
+RenderSystem.prototype.setHighlight = function(world, typeId = undefined) {
+    pieceDisplayQuery(world).forEach(id => {
+        if (Piece.typeId[id] === typeId) {
+            Piece.state[id] |= PIECE_STATES.HIGHLIGHTED;
+        } else {
+            Piece.state[id] &= (~PIECE_STATES.HIGHLIGHTED);
+        }
+    })
+}
+
+RenderSystem.prototype.clearHighlight = function(world) {
+    this.setHighlight(world, undefined);
+}
+
+RenderSystem.prototype.blink = function(world, id) {
+    const sprite = this._stage.children.find(c => c.name === id);
+    if (sprite) {
+        gsap.to(sprite, {
+            duration: 0.3, 
+            yoyo: true, 
+            repeat: 3, 
+            pixi: { scale: 1.2 }
+        });    
     }
+
 }
 
-RenderSystem.prototype.setHighlightType = function(typename, status) {
-    this._highlightType = (status) ? typename : undefined;
-}
-
-RenderSystem.prototype.update = function(t, entityManager) {
-    if (!this._renderer) return;
+RenderSystem.prototype.update = function(world) {
+    if (!this._renderer || !this._isReady) return;
 
     // add sprites to pieces that don't have one
-    entityManager.getEntitiesWithComponent('piece')
-        .filter(entity => entityManager.getEntityComponent(entity, 'sprite') === undefined)
-        .forEach(entity => {
-            const piece = entityManager.getEntityComponent(entity, 'piece');
-            
-            const sprite = new Sprite(this._textures[PIECE_TYPES.get(piece.type).sprite]);
-            sprite.anchor = { x: 0.5, y: 0.5 };
-            sprite.buttonMode = true;
-            sprite.hitArea = new Circle(0, 0, 22);
-            sprite.position = axialToScreen(piece.position.q, piece.position.r);
+    enterDisplayable(world).forEach(id => {    
+        const spriteName = SPRITE_NAMES[Displayable.spriteId[id]];
+        const sprite = new Sprite(this._spritesheet.textures[spriteName]);
+        sprite.name = id;
+        sprite.anchor = { x: 0.5, y: 0.5 };
+        sprite.buttonMode = true;
+        sprite.hitArea = new Circle(0, 0, 22);
+        sprite.addListener('pointertap', () => { this.emit(SELECT_EVENT, id) });
 
-            sprite.addListener('pointertap', () => { this.emit('SELECT', entity) });
+        this._stage.addChild(sprite);
+        // console.debug(`RenderSystem.update - new sprite for entity ${id} => `, sprite);
+    });
 
-            entityManager.setEntityComponent(entity, 'sprite', sprite);
-            // console.debug(`RenderSystem.update - new sprite for ${entity.name} => `, sprite);
-        });
+    // remove sprites we no longer need
+    exitDisplayable(world).forEach(id => {    
+        this._stage.children.filter(c => c.name === id)
+            .forEach(sprite => {
+                sprite.destroy();
+                this._stage.removeChild(sprite);
+            });
+    });
 
-    // add sprites to selectors that don't have one
-    entityManager.getEntitiesWithComponent('selector')
-        .filter(entity => entityManager.getEntityComponent(entity, 'sprite') === undefined)
-        .forEach(entity => {
-            const otherEntity = entityManager.getEntityComponent(entity, 'selector').for;
-            const otherSprite = entityManager.getEntityComponent(otherEntity, 'sprite');
-            const sprite = new Sprite(this._textures['selector.png']);
-            sprite.anchor = { x: 0.5, y: 0.5 };
-            sprite.position.copyFrom(otherSprite.position);
+    // update axial sprite posisions to screen positions
+    axialDisplayableQuery(world).forEach(id => {
+        this._stage.children.filter(c => c.name === id).forEach(sprite => {
+            const position = axialToScreen(AxialPosition.q[id], AxialPosition.r[id]);
+            sprite.x = position.x;
+            sprite.y = position.y;
+        })
+    })
+    
+    // for every piece with a dislpayable...
+    pieceDisplayQuery(world).forEach(id => {
+        // update the visual state of the piece if there is a piece to reflect
+        const sprite = this._stage.children.find(c => c.name === id);
+        const selectorSprite = sprite.children.find(c => c.name === 'SELECTOR');
 
-            entityManager.setEntityComponent(entity, 'sprite', sprite);
-        });
-
-    // add scoreboard display components...
-    entityManager.getEntitiesWithComponent('score')
-        .filter(entity => entityManager.getEntityComponent(entity, 'sprite') === undefined)
-        .forEach(entity => {
-            const scoreObj = entityManager.getEntityComponent(entity, 'score');
-            
-            let p = new Sprite(this._textures[PIECE_TYPES.get(scoreObj.type).sprite]);
-            p.anchor.set(0.5);
-            p.scale.set(0.7); 
-            p.position = SCOREBOARD_POSITION.get(scoreObj.type);
-            p.buttonMode = true;
-            
-            if (PIECE_TYPES.get(scoreObj.type).qty > 1) {
-                const l = new Text('0',{fontFamily : 'Arial', fontSize: 24, fill : 0xffffff, align : 'center'}); 
-                l.position = {x: 20, y: -30};
-                p.addChild(l);
-            }
-
-            // process scoreboard click+hold events
-            p.addListener('pointerdown', () => { this._highlightType = scoreObj.type });
-            p.addListener('pointerup', () => { this._highlightType = undefined });
-            p.addListener('pointerout', () => { this._highlightType = undefined });
-
-            entityManager.setEntityComponent(entity, 'sprite', p);
-        });
-
-    // console.debug(`RenderSystem.update: ${entities.length} entities`);
-
-    //
-    // Start the rendering!
-    //
-    this._renderer.plugins.batch.start();
-
-    // add static components
-    const stage = new Container();
-    stage.addChild(this._static);
-
-    // for every entity with a sprite...
-    entityManager.getEntitiesWithComponent('sprite').forEach(entity => {
-        const sprite = entityManager.getEntityComponent(entity, 'sprite');
-        
-        // update the visual state if there is a piece to reflect
-        const piece = entityManager.getEntityComponent(entity, 'piece');
-        if (piece) {
-            sprite.position = axialToScreen(piece.position.q, piece.position.r);
-            
-            if (piece.enabled) {
-                sprite.tint = TINT_SHOW;
-                sprite.alpha = ALPHA_SHOW;
-                sprite.interactive = true;
-            } else {
-                sprite.tint = (piece.type == this._highlightType) ? TINT_SHOW : TINT_HIDE;
-                sprite.alpha = ALPHA_HIDE;
-                sprite.interactive = false;
-            }
+        if (Piece.state[id] & PIECE_STATES.ENABLED) {
+            sprite.tint = DISPLAY_STATES.TINT_SHOW;
+            sprite.alpha = DISPLAY_STATES.ALPHA_SHOW;
+            sprite.interactive = true;
+        }
+        else if (Piece.state[id] & PIECE_STATES.HIGHLIGHTED)
+        {
+            sprite.tint = DISPLAY_STATES.TINT_SHOW;
+            sprite.alpha = DISPLAY_STATES.ALPHA_HIDE;
+            sprite.interactive = false;
+        }
+        else {
+            sprite.tint = DISPLAY_STATES.TINT_HIDE;
+            sprite.alpha = DISPLAY_STATES.ALPHA_HIDE;
+            sprite.interactive = false;
         }
 
-        // update scoreboard components based on values...
-        const score = entityManager.getEntityComponent(entity, 'score');
-        if (score) {
-            sprite.tint = (score.value == 0) ? TINT_HIDE : TINT_SHOW;
-            sprite.interactive = (score.value > 0);
-            let label = null;
-            if (label = sprite.children.find(c => c instanceof Text)) {
-                label.text = `${score.value}`;
-            }
-        }
+        if ((Piece.state[id] & PIECE_STATES.SELECTED) && !selectorSprite) {
+            // add a new Selector
+            const newSelector = new Sprite(this._spritesheet.textures['selector.png']);
+            newSelector.name = 'SELECTOR';
+            newSelector.anchor = { x: 0.5, y: 0.5 };
+            sprite.addChild(newSelector);
 
-        // make sure selectors stay with their pieces
-        const selector = entityManager.getEntityComponent(entity, 'selector');
-        if (selector) {
-            sprite.position.copyFrom(entityManager.getEntityComponent(selector.for, 'sprite').position);
+        }
+        else if ((Piece.state[id] & PIECE_STATES.SELECTED) == 0 && selectorSprite) {
+            // remove the Selector
+            sprite.removeChild(selectorSprite);
+            selectorSprite.destroy();
         }
         
         // add them to the display container
-        stage.addChild(sprite);
         sprite.updateTransform();
     });
 
     // render all the components and finish the batch to flush
-    this._renderer.render(stage);
+    this._renderer.plugins.batch.start();
+    this._renderer.render(this._stage);
     this._renderer.plugins.batch.stop();
 }
 
+export { RenderSystem, SELECT_EVENT };
 export default RenderSystem;

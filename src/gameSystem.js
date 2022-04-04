@@ -1,110 +1,196 @@
 import { EventEmitter } from "@pixi/utils";
-import { AXIAL_VECTORS, PIECE_TYPES, METALS } from "./constants";
+import { defineQuery, enterQuery, exitQuery, hasComponent, addEntity, removeEntity, addComponent } from "bitecs";
+import { AxialPosition, Displayable, Piece, PIECE_STATES, PIECE_TYPES, METAL_TYPES } from "./components";
 
-function mapAxial(a) {
-    return mapAxialQR(a.q, a.r);
+const AXIAL_VECTORS = [
+    {q: +1, r: 0}, {q: +1, r: -1}, {q: 0, r: -1}, 
+    {q: -1, r: 0}, {q: -1, r: +1}, {q: 0, r: +1},
+];
+
+const mapqr = function(q, r) {
+    return `${q},${r}`;
 }
-function mapAxialQR(q, r) {
-    return `${q}|${r}`;
-}
+
+const pieceQuery = defineQuery([Piece, AxialPosition]);
+const enterPieceQuery = enterQuery(pieceQuery);
+const exitPieceQuery  = exitQuery(pieceQuery);
 
 function GameSystem() {
     EventEmitter.call(this);
+
+    this.init();
 
     return this;
 }
 
 GameSystem.prototype = Object.create(EventEmitter.prototype);
 
-GameSystem.prototype.update = function(t, entityManager) {
-    // look for selectors that are complete
-    const selectedEntities = entityManager.getEntitiesWithComponentValue('piece', 'selected', true);
-    if (selectedEntities.length == 1) {
-        const pieceType = entityManager.getEntityComponent(selectedEntities[0], 'piece').type;
+GameSystem.prototype.init = function() {
+    console.debug(`GameSystem.init`);
+    this._pieceMap = new Map();
+}
 
-        if (PIECE_TYPES.get(pieceType).matches.length == 0) {
+GameSystem.prototype.clear = function(world) {
+    pieceQuery(world).forEach(e => removeEntity(world, e));
+    this._pieceMap = new Map();
+}
+
+GameSystem.prototype.addPiece = function(world, piece) {
+    if (!piece) return;
+
+    const eid = addEntity(world);
+    addComponent(world, AxialPosition, eid);
+    addComponent(world, Piece, eid);
+    addComponent(world, Displayable, eid);
+    
+    AxialPosition.q[eid] = piece.q || 0;
+    AxialPosition.r[eid] = piece.r || 0;
+    Piece.state[eid] = PIECE_STATES.NONE;
+    Piece.typeId[eid] = piece.index || undefined;
+    Displayable.spriteId[eid] = piece.spriteId || undefined;
+
+    return eid;
+}
+
+const GAME_OVER_EVENT = 'GAME_OVER';
+const REMOVE_EVENT = 'REMOVE';
+GameSystem.prototype.update = function(world) {
+    let isDirty = false;
+
+    // remove old entries from the map
+    exitPieceQuery(world).forEach(id => {
+        this._pieceMap.delete(mapqr(AxialPosition.q[id], AxialPosition.r[id]));
+        isDirty = true;
+    });
+
+    // add new pieces to the map
+    enterPieceQuery(world).forEach(id => {
+        console.debug(`New Piece: ${id} ${AxialPosition.q[id]},${AxialPosition.r[id]} ${PIECE_TYPES[Piece.typeId[id]].type}`);
+        this._pieceMap.set(mapqr(AxialPosition.q[id],  AxialPosition.r[id]), id);
+
+        console.assert(this._pieceMap.get(mapqr(AxialPosition.q[id], AxialPosition.r[id])) == id, 'Value was not saved!');
+        isDirty = true;
+    });
+    
+    // Look for selectors that are complete
+    let selectedEntities = [];
+    pieceQuery(world).forEach(id => {
+        if (Piece.state[id] & PIECE_STATES.SELECTED) {
+            selectedEntities.push(id);
+        }
+    });
+    if (selectedEntities.length == 1) {
+        const pieceTypeId = Piece.typeId[selectedEntities[0]];
+
+        if (PIECE_TYPES[pieceTypeId].matches.length == 0) {
             // Single selector (no match required)
-            // console.debug(`  [ single selected - ${selectedEntities[0].name} ${pieceType} ]`);
-            this.emit('UNSELECT', selectedEntities);
-            this.emit('REMOVE', selectedEntities);
+            console.debug(`  [ single selected - ${PIECE_TYPES[pieceTypeId].type} ]`);
+            
+            Piece.state[selectedEntities[0]] &= (~PIECE_STATES.SELECTED);
+            this.emit(REMOVE_EVENT, selectedEntities);
         }
     }
     else if (selectedEntities.length == 2) {
-        const p0Type = entityManager.getEntityComponent(selectedEntities[0], 'piece').type;
-        const p1Type = entityManager.getEntityComponent(selectedEntities[1], 'piece').type;
+        const p0TypeId = Piece.typeId[selectedEntities[0]];
+        const p1TypeId = Piece.typeId[selectedEntities[1]];
 
-        if (PIECE_TYPES.get(p0Type).matches.includes(p1Type)) {
+        if (PIECE_TYPES[p0TypeId].matches.includes(PIECE_TYPES[p1TypeId].type)) {
             // matching pair!
-            // console.debug(`[ matching pair selected - ${selectedEntities[0].name}<->${selectedEntities[1].name} ]`);
-            this.emit('UNSELECT', selectedEntities);
-            this.emit('REMOVE', selectedEntities);
+            selectedEntities.forEach(id => Piece.state[id] &= (~PIECE_STATES.SELECTED));
+            console.debug(`[ matching pair selected - ${PIECE_TYPES[p0TypeId].type}<->${PIECE_TYPES[p1TypeId].type} ]`);
+            this.emit(REMOVE_EVENT, selectedEntities);
         } else {
             // non-matching pair => cancel the selection
             // console.debug(`[ no match - selection cancelled ]`);
-            this.emit('UNSELECT', selectedEntities);
+            selectedEntities.forEach(id => Piece.state[id] &= (~PIECE_STATES.SELECTED));
         }
         
     } else if (selectedEntities.length > 0) {
         // something is wrong - deselect everything.
         console.warn(`[ selection error - all selections cancelled ]`);
-        this.emit('UNSELECT', selectedEntities);
+        selectedEntities.forEach(id => Piece.state[id] &= (~PIECE_STATES.SELECTED));
     }
     
-
-    // build a map of pieces indexed by location
-    let pieces = new Map();
-    entityManager.getEntitiesWithComponent('piece')
-        .map(entity => entityManager.getEntityComponent(entity, 'piece'))
-        .forEach(piece => {
-            pieces.set(mapAxial(piece.position), piece);
-        });
-
-    // allow selection based on location...
-    for(let [key, piece] of pieces) {
-        const pos = piece.position;
-        let adj = [
-            pieces.has(mapAxialQR(pos.q + AXIAL_VECTORS[0][0], pos.r + AXIAL_VECTORS[0][1])),
-            pieces.has(mapAxialQR(pos.q + AXIAL_VECTORS[1][0], pos.r + AXIAL_VECTORS[1][1])),
-            pieces.has(mapAxialQR(pos.q + AXIAL_VECTORS[2][0], pos.r + AXIAL_VECTORS[2][1])),
-            pieces.has(mapAxialQR(pos.q + AXIAL_VECTORS[3][0], pos.r + AXIAL_VECTORS[3][1])),
-            pieces.has(mapAxialQR(pos.q + AXIAL_VECTORS[4][0], pos.r + AXIAL_VECTORS[4][1])),
-            pieces.has(mapAxialQR(pos.q + AXIAL_VECTORS[5][0], pos.r + AXIAL_VECTORS[5][1])),
-        ];
+    // update piece selectiability if there has been a layout change
+    if (isDirty) {
+        // console.debug('Game map has changed - check');
         
-        if ((!adj[0] && !adj[1] && !adj[2]) || (!adj[1] && !adj[2] && !adj[3]) ||
-            (!adj[2] && !adj[3] && !adj[4]) || (!adj[3] && !adj[4] && !adj[5]) ||
-            (!adj[4] && !adj[5] && !adj[0]) || (!adj[5] && !adj[0] && !adj[1])) {
-            // This piece has at least three in a row with nothing
-            piece.enabled = true;
+        // Check by adjacent
+        for(let id of this._pieceMap.values()) {
+            let q = AxialPosition.q[id];
+            let r = AxialPosition.r[id];
+            let adj = [
+                this._pieceMap.has(mapqr((q + AXIAL_VECTORS[0].q), (r + AXIAL_VECTORS[0].r))),
+                this._pieceMap.has(mapqr((q + AXIAL_VECTORS[1].q), (r + AXIAL_VECTORS[1].r))),
+                this._pieceMap.has(mapqr((q + AXIAL_VECTORS[2].q), (r + AXIAL_VECTORS[2].r))),
+                this._pieceMap.has(mapqr((q + AXIAL_VECTORS[3].q), (r + AXIAL_VECTORS[3].r))),
+                this._pieceMap.has(mapqr((q + AXIAL_VECTORS[4].q), (r + AXIAL_VECTORS[4].r))),
+                this._pieceMap.has(mapqr((q + AXIAL_VECTORS[5].q), (r + AXIAL_VECTORS[5].r))),
+            ];
+            // console.debug(`  ${q},${r} ${adj}`);
+            
+            if ((!adj[0] && !adj[1] && !adj[2]) || (!adj[1] && !adj[2] && !adj[3]) ||
+                (!adj[2] && !adj[3] && !adj[4]) || (!adj[3] && !adj[4] && !adj[5]) ||
+                (!adj[4] && !adj[5] && !adj[0]) || (!adj[5] && !adj[0] && !adj[1])) {
+                // This piece has at least three in a row with nothing
+                Piece.state[id] |= PIECE_STATES.ENABLED;
+            }
+            else {
+                Piece.state[id] &= (~PIECE_STATES.ENABLED);
+            }
+
         }
-        else {
-            piece.enabled = false;
+
+        // restrict selection of metals based on others
+        let metalIds = [];
+        for (let id of this._pieceMap.values()) {
+            if (METAL_TYPES.indexOf(PIECE_TYPES[Piece.typeId[id]].type) >= 0) metalIds.push(id);
         }
+        metalIds.sort((a, b) => METAL_TYPES.indexOf(PIECE_TYPES[Piece.typeId[a]].type) - METAL_TYPES.indexOf(PIECE_TYPES[Piece.typeId[b]].type))
+        metalIds.shift(); // ignore the first item
+        metalIds.forEach(id => Piece.state[id] &= (~PIECE_STATES.ENABLED));
+
     }
 
-    // restrict selection of metals based on others
-    const metals = entityManager.getEntitiesWithComponent('piece')
-        .map(entity => entityManager.getEntityComponent(entity, 'piece'))
-        .filter(piece => METALS.includes(piece.type))
-        .sort((a, b) => METALS.indexOf(a.type) - METALS.indexOf(b.type));
-    // console.debug(`  - sorted METALS: ${metals.map(m => m.components.get('piece').type)}`)
-    metals.shift();   // ignore the first metal
-    metals.forEach(e => e.enabled = false); // only the lowest metal is selectable
+    if (pieceQuery(world).length == 0) {
+        this.emit(GAME_OVER_EVENT, true);
+    }
 }
 
+GameSystem.prototype.selectEntity = function(world, id, shouldSelect) {
+    if (hasComponent(world, Piece, id)) {
+        if (shouldSelect === true) {
+            Piece.state[id] |= PIECE_STATES.SELECTED;
+        }
+        else if (shouldSelect === false) {
+            Piece.state[id] &= (~PIECE_STATES.SELECTED);
+        } else {
+            Piece.state[id] ^= PIECE_STATES.SELECTED;
+        }
+    }
+}
 
-GameSystem.prototype.getHint = function(entityManager) {
-    const enabledEntities = entityManager.getEntitiesWithComponentValue('piece', 'enabled', true);
+GameSystem.prototype.clearSelections = function(world) {
+    pieceQuery(world).forEach(id => {
+        if (Piece.state[id] & PIECE_STATES.SELECTED)
+            Piece.state[id] &= (~PIECE_STATES.SELECTED);
+    });
+}
+
+GameSystem.prototype.getHint = function(world) {
+    const enabledEntities = pieceQuery(world).filter(id =>
+        Piece.state[id] &= PIECE_STATES.ENABLED
+    );
 
     let e2 = null;
-    let e1 = enabledEntities.find(entity => {
-        let p1 = entityManager.getEntityComponent(entity,'piece');
-        let m1 = PIECE_TYPES.get(p1.type).matches;
+    let e1 = enabledEntities.find(eid => {
+        let p1 = Piece.typeId[eid];
+        let m1 = PIECE_TYPES[p1].matches;
 
         if (!m1 || m1.length == 0) return true;
 
-        e2 = enabledEntities.find(e => (
-            e !== entity && m1.includes(entityManager.getEntityComponent(e,'piece').type)
+        e2 = enabledEntities.find(eid2 => (
+            eid2 !== eid && m1.includes(PIECE_TYPES[Piece.typeId[eid2]].type)
         ));
         if (e2 !== null && e2 !== undefined) {
             return true;
@@ -119,4 +205,5 @@ GameSystem.prototype.getHint = function(entityManager) {
     return [];
 }
 
+export { GAME_OVER_EVENT, REMOVE_EVENT };
 export default GameSystem;
